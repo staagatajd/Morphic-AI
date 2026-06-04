@@ -28,7 +28,7 @@ data class AuthResponse(
 )
 
 object ApiClient {
-    private const val BASE_URL = "http://10.0.2.2:5000" // Emulator loopback
+    private const val BASE_URL = "http://192.168.100.50:5000"
 
     val client = HttpClient(Android) {
         install(ContentNegotiation) {
