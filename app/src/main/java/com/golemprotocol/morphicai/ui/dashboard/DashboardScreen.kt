@@ -1,5 +1,6 @@
 package com.golemprotocol.morphicai.ui.dashboard
 
+import android.widget.Toast
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -19,8 +20,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
+import com.golemprotocol.morphicai.R
 import com.golemprotocol.morphicai.models.User
 import kotlin.random.Random
 
@@ -35,10 +39,12 @@ fun DashboardScreen(
 
     Scaffold(
         topBar = {
-            ProfileCard(
-                user = uiState.user,
-                onClick = { showProfileDialog = true }
-            )
+            if (selectedTab == 0) {
+                ProfileCard(
+                    user = uiState.user,
+                    onClick = { showProfileDialog = true }
+                )
+            }
         },
         bottomBar = {
             BottomNavigationBar(
@@ -48,29 +54,52 @@ fun DashboardScreen(
         }
     ) { paddingValues ->
         Box(modifier = Modifier.padding(paddingValues)) {
-            if (uiState.isLoading) {
-                SkeletonList()
-            } else {
-                DashboardContent()
+            when (selectedTab) {
+                0 -> {
+                    if (uiState.isLoading) {
+                        SkeletonList()
+                    } else {
+                        DashboardContent()
+                    }
+                }
+                1 -> StaticPlaceholder(R.layout.layout_search)
+                2 -> StaticPlaceholder(R.layout.layout_map)
+                3 -> StaticPlaceholder(R.layout.layout_settings)
             }
         }
     }
 
+    val context = LocalContext.current
     if (showProfileDialog) {
         ProfileDialog(
             user = uiState.user,
             largeText = uiState.settings.largeTexts,
             alwaysOn = uiState.settings.alwaysOn,
             onLargeTextChange = viewModel::updateLargeText,
-            onAlwaysOnChange = viewModel::updateAlwaysOn,
+            onAlwaysOnChange = { enabled ->
+                viewModel.updateAlwaysOn(enabled)
+                val msg = if (enabled) "Background optimization service activated." else "Service deactivated."
+                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+            },
             onSignOut = {
                 viewModel.signOut()
                 showProfileDialog = false
+                Toast.makeText(context, "Successfully signed out", Toast.LENGTH_SHORT).show()
                 onSignOut()
             },
             onDismiss = { showProfileDialog = false }
         )
     }
+}
+
+@Composable
+fun StaticPlaceholder(layoutRes: Int) {
+    AndroidView(
+        factory = { context ->
+            android.view.LayoutInflater.from(context).inflate(layoutRes, null)
+        },
+        modifier = Modifier.fillMaxSize()
+    )
 }
 
 @Composable
