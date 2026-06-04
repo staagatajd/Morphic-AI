@@ -4,11 +4,14 @@ import com.golemprotocol.morphicai.models.Command
 import com.golemprotocol.morphicai.models.Golem
 import com.golemprotocol.morphicai.models.SyncMetadata
 import com.golemprotocol.morphicai.models.User
+import com.golemprotocol.morphicai.models.AppSettings
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
@@ -146,6 +149,18 @@ class DatabaseOpenHelper(context: Context) : SQLiteOpenHelper(
             )
         """.trimIndent())
 
+        // AppSettings table
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS app_settings (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                large_texts INTEGER NOT NULL DEFAULT 0,
+                always_on INTEGER NOT NULL DEFAULT 0
+            )
+        """.trimIndent())
+
+        // Initial settings record
+        db.execSQL("INSERT OR IGNORE INTO app_settings (id, large_texts, always_on) VALUES (1, 0, 0)")
+
         // Create indexes for query performance
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_users_owner ON users(id)")
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_golems_owner ON golems(owner_id)")
@@ -169,26 +184,14 @@ class DatabaseOpenHelper(context: Context) : SQLiteOpenHelper(
  */
 class StorageHelper(private val db: SQLiteDatabase) {
 
-    fun beginTransaction() {
+    suspend fun <T> inTransaction(block: suspend () -> T): T {
         db.beginTransaction()
-    }
-
-    fun setTransactionSuccessful() {
-        db.setTransactionSuccessful()
-    }
-
-    fun endTransaction() {
-        db.endTransaction()
-    }
-
-    fun <T> inTransaction(block: () -> T): T {
-        beginTransaction()
         return try {
             val result = block()
-            setTransactionSuccessful()
+            db.setTransactionSuccessful()
             result
         } finally {
-            endTransaction()
+            db.endTransaction()
         }
     }
 
@@ -528,10 +531,35 @@ class DatabaseService(context: Context) {
     private val mapping = MappingUtils
     private val parser = ExternalDataParser
 
+    // ============= APP SETTINGS =============
+
+    suspend fun getAppSettings(): AppSettings = withContext(Dispatchers.IO) {
+        val cursor = db.query("app_settings", null, "id = 1", null, null, null, null)
+        cursor.use {
+            if (it.moveToFirst()) {
+                AppSettings(
+                    id = it.getInt(it.getColumnIndexOrThrow("id")),
+                    largeTexts = it.getInt(it.getColumnIndexOrThrow("large_texts")) == 1,
+                    alwaysOn = it.getInt(it.getColumnIndexOrThrow("always_on")) == 1
+                )
+            } else {
+                AppSettings()
+            }
+        }
+    }
+
+    suspend fun updateAppSettings(settings: AppSettings): Boolean = withContext(Dispatchers.IO) {
+        val values = ContentValues().apply {
+            put("large_texts", if (settings.largeTexts) 1 else 0)
+            put("always_on", if (settings.alwaysOn) 1 else 0)
+        }
+        db.update("app_settings", values, "id = 1", null) > 0
+    }
+
     // ============= USER CRUD =============
 
-    fun upsertUser(user: User): Boolean {
-        return storage.inTransaction {
+    suspend fun upsertUser(user: User): Boolean = withContext(Dispatchers.IO) {
+        storage.inTransaction {
             try {
                 storage.logCrashRecovery("UPSERT", "USER", user.id, user.toJson())
 
@@ -571,7 +599,7 @@ class DatabaseService(context: Context) {
         }
     }
 
-    fun getUserById(userId: String): User? {
+    suspend fun getUserById(userId: String): User? = withContext(Dispatchers.IO) {
         val cursor = db.query(
             "users",
             null,
@@ -582,7 +610,7 @@ class DatabaseService(context: Context) {
             null
         )
 
-        return cursor.use {
+        cursor.use {
             if (it.moveToFirst()) {
                 mapping.storageToUser(rowToMap(it))
             } else {
@@ -591,7 +619,7 @@ class DatabaseService(context: Context) {
         }
     }
 
-    fun getAllUsers(): List<User> {
+    suspend fun getAllUsers(): List<User> = withContext(Dispatchers.IO) {
         val cursor = db.query(
             "users",
             null,
@@ -602,7 +630,7 @@ class DatabaseService(context: Context) {
             "created_at DESC"
         )
 
-        return cursor.use {
+        cursor.use {
             val users = mutableListOf<User>()
             while (it.moveToNext()) {
                 users.add(mapping.storageToUser(rowToMap(it)))
@@ -611,8 +639,8 @@ class DatabaseService(context: Context) {
         }
     }
 
-    fun softDeleteUser(userId: String): Boolean {
-        return storage.inTransaction {
+    suspend fun softDeleteUser(userId: String): Boolean = withContext(Dispatchers.IO) {
+        storage.inTransaction {
             try {
                 storage.logCrashRecovery("SOFT_DELETE", "USER", userId, "")
 
@@ -631,8 +659,8 @@ class DatabaseService(context: Context) {
 
     // ============= GOLEM CRUD =============
 
-    fun upsertGolem(golem: Golem): Boolean {
-        return storage.inTransaction {
+    suspend fun upsertGolem(golem: Golem): Boolean = withContext(Dispatchers.IO) {
+        storage.inTransaction {
             try {
                 storage.logCrashRecovery("UPSERT", "GOLEM", golem.id, golem.toJson())
 
@@ -673,7 +701,7 @@ class DatabaseService(context: Context) {
         }
     }
 
-    fun getGolemById(golemId: String): Golem? {
+    suspend fun getGolemById(golemId: String): Golem? = withContext(Dispatchers.IO) {
         val cursor = db.query(
             "golems",
             null,
@@ -684,7 +712,7 @@ class DatabaseService(context: Context) {
             null
         )
 
-        return cursor.use {
+        return@withContext cursor.use {
             if (it.moveToFirst()) {
                 mapping.storageToGolem(rowToMap(it))
             } else {
@@ -693,7 +721,7 @@ class DatabaseService(context: Context) {
         }
     }
 
-    fun getGolemsByOwner(ownerId: String): List<Golem> {
+    suspend fun getGolemsByOwner(ownerId: String): List<Golem> = withContext(Dispatchers.IO) {
         val cursor = db.query(
             "golems",
             null,
@@ -704,7 +732,7 @@ class DatabaseService(context: Context) {
             "created_at DESC"
         )
 
-        return cursor.use {
+        return@withContext cursor.use {
             val golems = mutableListOf<Golem>()
             while (it.moveToNext()) {
                 golems.add(mapping.storageToGolem(rowToMap(it)))
@@ -713,8 +741,8 @@ class DatabaseService(context: Context) {
         }
     }
 
-    fun softDeleteGolem(golemId: String): Boolean {
-        return storage.inTransaction {
+    suspend fun softDeleteGolem(golemId: String): Boolean = withContext(Dispatchers.IO) {
+        storage.inTransaction {
             try {
                 storage.logCrashRecovery("SOFT_DELETE", "GOLEM", golemId, "")
 
@@ -733,8 +761,8 @@ class DatabaseService(context: Context) {
 
     // ============= COMMAND CRUD =============
 
-    fun upsertCommand(command: Command): Boolean {
-        return storage.inTransaction {
+    suspend fun upsertCommand(command: Command): Boolean = withContext(Dispatchers.IO) {
+        storage.inTransaction {
             try {
                 storage.logCrashRecovery("UPSERT", "COMMAND", command.id, command.toJson())
 
@@ -775,7 +803,7 @@ class DatabaseService(context: Context) {
         }
     }
 
-    fun getCommandById(commandId: String): Command? {
+    suspend fun getCommandById(commandId: String): Command? = withContext(Dispatchers.IO) {
         val cursor = db.query(
             "commands",
             null,
@@ -786,7 +814,7 @@ class DatabaseService(context: Context) {
             null
         )
 
-        return cursor.use {
+        return@withContext cursor.use {
             if (it.moveToFirst()) {
                 mapping.storageToCommand(rowToMap(it))
             } else {
@@ -795,7 +823,7 @@ class DatabaseService(context: Context) {
         }
     }
 
-    fun getCommandsByGolem(golemId: String): List<Command> {
+    suspend fun getCommandsByGolem(golemId: String): List<Command> = withContext(Dispatchers.IO) {
         val cursor = db.query(
             "commands",
             null,
@@ -806,7 +834,7 @@ class DatabaseService(context: Context) {
             "created_at DESC"
         )
 
-        return cursor.use {
+        return@withContext cursor.use {
             val commands = mutableListOf<Command>()
             while (it.moveToNext()) {
                 commands.add(mapping.storageToCommand(rowToMap(it)))
@@ -815,8 +843,8 @@ class DatabaseService(context: Context) {
         }
     }
 
-    fun softDeleteCommand(commandId: String): Boolean {
-        return storage.inTransaction {
+    suspend fun softDeleteCommand(commandId: String): Boolean = withContext(Dispatchers.IO) {
+        storage.inTransaction {
             try {
                 storage.logCrashRecovery("SOFT_DELETE", "COMMAND", commandId, "")
 
@@ -835,8 +863,8 @@ class DatabaseService(context: Context) {
 
     // ============= SYNC OPERATIONS =============
 
-    fun syncUsers(externalData: Any?): SyncResult {
-        return storage.inTransaction {
+    suspend fun syncUsers(externalData: Any?): SyncResult = withContext(Dispatchers.IO) {
+        storage.inTransaction {
             val errors = mutableListOf<String>()
             var inserted = 0
             var updated = 0
@@ -923,8 +951,8 @@ class DatabaseService(context: Context) {
         }
     }
 
-    fun syncGolems(externalData: Any?): SyncResult {
-        return storage.inTransaction {
+    suspend fun syncGolems(externalData: Any?): SyncResult = withContext(Dispatchers.IO) {
+        storage.inTransaction {
             val errors = mutableListOf<String>()
             var inserted = 0
             var updated = 0
@@ -1007,8 +1035,8 @@ class DatabaseService(context: Context) {
         }
     }
 
-    fun syncCommands(externalData: Any?): SyncResult {
-        return storage.inTransaction {
+    suspend fun syncCommands(externalData: Any?): SyncResult = withContext(Dispatchers.IO) {
+        storage.inTransaction {
             val errors = mutableListOf<String>()
             var inserted = 0
             var updated = 0
@@ -1091,8 +1119,8 @@ class DatabaseService(context: Context) {
         }
     }
 
-    fun markSyncSuccessful(tableName: String, recordIds: List<String>): Boolean {
-        return storage.inTransaction {
+    suspend fun markSyncSuccessful(tableName: String, recordIds: List<String>): Boolean = withContext(Dispatchers.IO) {
+        storage.inTransaction {
             try {
                 val values = ContentValuesBuilder()
                     .put("sync_state", SyncState.SYNCED.value)
@@ -1110,7 +1138,7 @@ class DatabaseService(context: Context) {
         }
     }
 
-    fun getConflictedRecords(tableName: String): List<Map<String, Any?>> {
+    suspend fun getConflictedRecords(tableName: String): List<Map<String, Any?>> = withContext(Dispatchers.IO) {
         val cursor = db.query(
             tableName,
             null,
@@ -1121,7 +1149,7 @@ class DatabaseService(context: Context) {
             "last_modified DESC"
         )
 
-        return cursor.use {
+        cursor.use {
             val records = mutableListOf<Map<String, Any?>>()
             while (it.moveToNext()) {
                 records.add(rowToMap(it))
@@ -1130,7 +1158,7 @@ class DatabaseService(context: Context) {
         }
     }
 
-    fun getPendingRecords(tableName: String): List<Map<String, Any?>> {
+    suspend fun getPendingRecords(tableName: String): List<Map<String, Any?>> = withContext(Dispatchers.IO) {
         val cursor = db.query(
             tableName,
             null,
@@ -1141,7 +1169,7 @@ class DatabaseService(context: Context) {
             "last_modified ASC"
         )
 
-        return cursor.use {
+        cursor.use {
             val records = mutableListOf<Map<String, Any?>>()
             while (it.moveToNext()) {
                 records.add(rowToMap(it))
@@ -1152,15 +1180,15 @@ class DatabaseService(context: Context) {
 
     // ============= CRASH RECOVERY =============
 
-    fun recoverFromCrash(): Boolean {
-        return storage.inTransaction {
+    suspend fun recoverFromCrash(): Boolean = withContext(Dispatchers.IO) {
+        storage.inTransaction {
             try {
                 val recoveryLogs = storage.getCrashRecoveryLogs()
 
                 recoveryLogs.forEach { log ->
                     try {
                         val operation = log["operation_type"]
-                        val recordId = log["record_id"]
+                        // val recordId = log["record_id"]
 
                         when (operation) {
                             "SOFT_DELETE" -> {
@@ -1168,7 +1196,7 @@ class DatabaseService(context: Context) {
                             }
                             "UPSERT" -> {
                                 // Verify record exists and is consistent
-                                val snapshot = log["snapshot"] ?: "{}"
+                                // val snapshot = log["snapshot"] ?: "{}"
                                 // Reconstruct from snapshot if needed
                             }
                         }
@@ -1186,8 +1214,8 @@ class DatabaseService(context: Context) {
         }
     }
 
-    fun updateSyncMetadata(ownerId: String, modelType: String, timestamp: String): Boolean {
-        return storage.inTransaction {
+    suspend fun updateSyncMetadata(ownerId: String, modelType: String, timestamp: String): Boolean = withContext(Dispatchers.IO) {
+        storage.inTransaction {
             try {
                 val id = "$ownerId:$modelType"
                 val existing = db.query(
