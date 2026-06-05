@@ -28,7 +28,7 @@ data class AuthResponse(
 )
 
 object ApiClient {
-    private const val BASE_URL = "http://192.168.100.50:5000"
+    private const val BASE_URL = "https://golem-protocol-api.vercel.app"
 
     val client = HttpClient(Android) {
         install(ContentNegotiation) {
