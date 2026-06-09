@@ -1,7 +1,5 @@
 package com.golemprotocol.morphicai.services
 
-import com.golemprotocol.morphicai.models.Command
-import com.golemprotocol.morphicai.models.Golem
 import com.golemprotocol.morphicai.models.SyncMetadata
 import com.golemprotocol.morphicai.models.User
 import com.golemprotocol.morphicai.models.AppSettings
@@ -49,6 +47,22 @@ data class SyncResult(
 )
 
 /**
+ * Data Models for Workspace and Role Analytics
+ */
+data class Workspace(
+    val id: String,
+    val name: String,
+    val createdAt: String
+)
+
+data class RoleAnalytics(
+    val id: Int,
+    val currentRole: String,
+    val mostUsedRole: String,
+    val roleSwitchesCount: Int
+)
+
+/**
  * Local Database Helper with crash recovery and transaction support
  */
 class DatabaseOpenHelper(context: Context) : SQLiteOpenHelper(
@@ -59,11 +73,16 @@ class DatabaseOpenHelper(context: Context) : SQLiteOpenHelper(
 ) {
     companion object {
         private const val DATABASE_NAME = "golem_protocol.db"
-        private const val DATABASE_VERSION = 1
+        const val DATABASE_VERSION = 1
     }
 
     override fun onCreate(db: SQLiteDatabase) {
         createAllTables(db)
+        
+        // Initial records for new paradigms
+        db.execSQL("INSERT OR IGNORE INTO role_analytics (id, current_role, most_used_role, role_switches_count) VALUES (1, 'Developer', 'Developer', 0)")
+        db.execSQL("INSERT OR IGNORE INTO workspaces (id, name, created_at) VALUES ('first_workspace_uuid', 'My First Workspace', '2026-06-10T00:00:00Z')")
+        
         initializeCrashRecovery(db)
     }
 
@@ -88,38 +107,22 @@ class DatabaseOpenHelper(context: Context) : SQLiteOpenHelper(
             )
         """.trimIndent())
 
-        // Golem table
+        // Workspaces table
         db.execSQL("""
-            CREATE TABLE IF NOT EXISTS golems (
+            CREATE TABLE IF NOT EXISTS workspaces (
                 id TEXT PRIMARY KEY,
-                owner_id TEXT NOT NULL,
                 name TEXT NOT NULL,
-                description TEXT,
-                avatar_url TEXT,
-                is_public INTEGER NOT NULL DEFAULT 0,
-                is_deleted INTEGER NOT NULL DEFAULT 0,
-                sync_state INTEGER NOT NULL DEFAULT 0,
-                last_modified TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (owner_id) REFERENCES users(id)
+                created_at TEXT NOT NULL
             )
         """.trimIndent())
 
-        // Command table
+        // Role Analytics table
         db.execSQL("""
-            CREATE TABLE IF NOT EXISTS commands (
-                id TEXT PRIMARY KEY,
-                golem_id TEXT NOT NULL,
-                owner_id TEXT NOT NULL,
-                trigger_phrase TEXT NOT NULL,
-                action_type TEXT NOT NULL,
-                action_payload TEXT,
-                is_deleted INTEGER NOT NULL DEFAULT 0,
-                sync_state INTEGER NOT NULL DEFAULT 0,
-                last_modified TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                FOREIGN KEY (golem_id) REFERENCES golems(id),
-                FOREIGN KEY (owner_id) REFERENCES users(id)
+            CREATE TABLE IF NOT EXISTS role_analytics (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                current_role TEXT NOT NULL DEFAULT 'Developer',
+                most_used_role TEXT NOT NULL DEFAULT 'Developer',
+                role_switches_count INTEGER NOT NULL DEFAULT 0
             )
         """.trimIndent())
 
@@ -163,11 +166,6 @@ class DatabaseOpenHelper(context: Context) : SQLiteOpenHelper(
 
         // Create indexes for query performance
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_users_owner ON users(id)")
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_golems_owner ON golems(owner_id)")
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_golems_deleted ON golems(is_deleted)")
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_commands_golem ON commands(golem_id)")
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_commands_owner ON commands(owner_id)")
-        db.execSQL("CREATE INDEX IF NOT EXISTS idx_commands_deleted ON commands(is_deleted)")
         db.execSQL("CREATE INDEX IF NOT EXISTS idx_sync_metadata_owner ON sync_metadata(owner_id)")
     }
 
@@ -290,30 +288,6 @@ class MappingUtils {
                     "last_modified" to Instant.now().toString(),
                     "created_at" to model.createdAt
                 )
-                is Golem -> mapOf(
-                    "id" to model.id,
-                    "owner_id" to model.ownerId,
-                    "name" to model.name,
-                    "description" to model.description,
-                    "avatar_url" to model.avatarUrl,
-                    "is_public" to if (model.isPublic) 1 else 0,
-                    "is_deleted" to 0,
-                    "sync_state" to syncState,
-                    "last_modified" to Instant.now().toString(),
-                    "created_at" to model.createdAt
-                )
-                is Command -> mapOf(
-                    "id" to model.id,
-                    "golem_id" to model.golemId,
-                    "owner_id" to model.ownerId,
-                    "trigger_phrase" to model.triggerPhrase,
-                    "action_type" to model.actionType,
-                    "action_payload" to model.actionPayload,
-                    "is_deleted" to 0,
-                    "sync_state" to syncState,
-                    "last_modified" to Instant.now().toString(),
-                    "created_at" to model.createdAt
-                )
                 is SyncMetadata -> mapOf(
                     "id" to model.id,
                     "owner_id" to model.ownerId,
@@ -335,32 +309,6 @@ class MappingUtils {
                 email = row["email"]?.toString() ?: "",
                 role = row["role"]?.toString() ?: "user",
                 isActive = (row["is_active"]?.toString() ?: "1").toIntOrNull() == 1,
-                createdAt = row["created_at"]?.toString() ?: Instant.now().toString()
-            )
-        }
-
-        fun storageToGolem(row: Map<String, Any?>): Golem {
-            return Golem(
-                id = row["id"]?.toString() ?: "",
-                ownerId = row["owner_id"]?.toString() ?: "",
-                name = row["name"]?.toString() ?: "",
-                description = row["description"]?.toString(),
-                avatarUrl = row["avatar_url"]?.toString(),
-                isPublic = (row["is_public"]?.toString() ?: "0").toIntOrNull() == 1,
-                isSynchronized = (row["sync_state"]?.toString()?.toIntOrNull() ?: 0) == SyncState.SYNCED.value,
-                createdAt = row["created_at"]?.toString() ?: Instant.now().toString()
-            )
-        }
-
-        fun storageToCommand(row: Map<String, Any?>): Command {
-            return Command(
-                id = row["id"]?.toString() ?: "",
-                golemId = row["golem_id"]?.toString() ?: "",
-                ownerId = row["owner_id"]?.toString() ?: "",
-                triggerPhrase = row["trigger_phrase"]?.toString() ?: "",
-                actionType = row["action_type"]?.toString() ?: "",
-                actionPayload = row["action_payload"]?.toString(),
-                isSynchronized = (row["sync_state"]?.toString()?.toIntOrNull() ?: 0) == SyncState.SYNCED.value,
                 createdAt = row["created_at"]?.toString() ?: Instant.now().toString()
             )
         }
@@ -417,58 +365,6 @@ class ExternalDataParser {
                 val createdAt = map["created_at"]?.toString() ?: Instant.now().toString()
 
                 User(id, username, email, role, isActive, createdAt)
-            } catch (e: Exception) {
-                null
-            }
-        }
-
-        /**
-         * Extract golem from external data
-         */
-        fun parseGolem(data: Any?): Golem? {
-            return try {
-                val map = when (data) {
-                    is JSONObject -> data.toMap()
-                    is Map<*, *> -> data.mapKeys { it.key.toString() }
-                    else -> return null
-                }
-
-                val id = map["id"]?.toString()?.takeIf { it.isNotEmpty() } ?: return null
-                val ownerId = map["owner_id"]?.toString()?.takeIf { it.isNotEmpty() } ?: return null
-                val name = map["name"]?.toString()?.takeIf { it.isNotEmpty() } ?: return null
-                val description = map["description"]?.toString()
-                val avatarUrl = map["avatar_url"]?.toString()
-                val isPublic = (map["is_public"]?.toString() ?: "false").toBoolean()
-                val isSynchronized = true
-                val createdAt = map["created_at"]?.toString() ?: Instant.now().toString()
-
-                Golem(id, ownerId, name, description, avatarUrl, isPublic, isSynchronized, createdAt)
-            } catch (e: Exception) {
-                null
-            }
-        }
-
-        /**
-         * Extract command from external data
-         */
-        fun parseCommand(data: Any?): Command? {
-            return try {
-                val map = when (data) {
-                    is JSONObject -> data.toMap()
-                    is Map<*, *> -> data.mapKeys { it.key.toString() }
-                    else -> return null
-                }
-
-                val id = map["id"]?.toString()?.takeIf { it.isNotEmpty() } ?: return null
-                val golemId = map["golem_id"]?.toString()?.takeIf { it.isNotEmpty() } ?: return null
-                val ownerId = map["owner_id"]?.toString()?.takeIf { it.isNotEmpty() } ?: return null
-                val triggerPhrase = map["trigger_phrase"]?.toString() ?: ""
-                val actionType = map["action_type"]?.toString() ?: ""
-                val actionPayload = map["action_payload"]?.toString()
-                val isSynchronized = true
-                val createdAt = map["created_at"]?.toString() ?: Instant.now().toString()
-
-                Command(id, golemId, ownerId, triggerPhrase, actionType, actionPayload, isSynchronized, createdAt)
             } catch (e: Exception) {
                 null
             }
@@ -657,204 +553,72 @@ class DatabaseService(context: Context) {
         }
     }
 
-    // ============= GOLEM CRUD =============
+    // ============= WORKSPACE CRUD =============
 
-    suspend fun upsertGolem(golem: Golem): Boolean = withContext(Dispatchers.IO) {
+    suspend fun insertWorkspace(workspace: Workspace): Boolean = withContext(Dispatchers.IO) {
         storage.inTransaction {
             try {
-                storage.logCrashRecovery("UPSERT", "GOLEM", golem.id, golem.toJson())
-
-                val existing = db.query(
-                    "golems",
-                    null,
-                    "id = ?",
-                    arrayOf(golem.id),
-                    null,
-                    null,
-                    null
-                )
-
+                storage.logCrashRecovery("INSERT", "WORKSPACE", workspace.id, "")
                 val values = ContentValuesBuilder()
-                    .put("id", golem.id)
-                    .put("owner_id", golem.ownerId)
-                    .put("name", golem.name)
-                    .put("description", golem.description)
-                    .put("avatar_url", golem.avatarUrl)
-                    .put("is_public", golem.isPublic)
-                    .put("is_deleted", 0)
-                    .put("sync_state", SyncState.PENDING.value)
-                    .put("last_modified", Instant.now().toString())
-                    .put("created_at", golem.createdAt)
+                    .put("id", workspace.id)
+                    .put("name", workspace.name)
+                    .put("created_at", workspace.createdAt)
                     .build()
-
-                val result = if (existing.count > 0) {
-                    db.update("golems", values, "id = ?", arrayOf(golem.id)) > 0
-                } else {
-                    db.insert("golems", null, values) > 0
-                }
-
-                existing.close()
-                result
+                db.insert("workspaces", null, values) > 0
             } catch (e: Exception) {
                 false
             }
         }
     }
 
-    suspend fun getGolemById(golemId: String): Golem? = withContext(Dispatchers.IO) {
-        val cursor = db.query(
-            "golems",
-            null,
-            "id = ? AND is_deleted = 0",
-            arrayOf(golemId),
-            null,
-            null,
-            null
-        )
-
-        return@withContext cursor.use {
-            if (it.moveToFirst()) {
-                mapping.storageToGolem(rowToMap(it))
-            } else {
-                null
-            }
-        }
-    }
-
-    suspend fun getGolemsByOwner(ownerId: String): List<Golem> = withContext(Dispatchers.IO) {
-        val cursor = db.query(
-            "golems",
-            null,
-            "owner_id = ? AND is_deleted = 0",
-            arrayOf(ownerId),
-            null,
-            null,
-            "created_at DESC"
-        )
-
-        return@withContext cursor.use {
-            val golems = mutableListOf<Golem>()
+    suspend fun getAllWorkspaces(): List<Workspace> = withContext(Dispatchers.IO) {
+        val cursor = db.query("workspaces", null, null, null, null, null, "created_at DESC")
+        cursor.use {
+            val list = mutableListOf<Workspace>()
             while (it.moveToNext()) {
-                golems.add(mapping.storageToGolem(rowToMap(it)))
-            }
-            golems
-        }
-    }
-
-    suspend fun softDeleteGolem(golemId: String): Boolean = withContext(Dispatchers.IO) {
-        storage.inTransaction {
-            try {
-                storage.logCrashRecovery("SOFT_DELETE", "GOLEM", golemId, "")
-
-                val values = ContentValuesBuilder()
-                    .put("is_deleted", 1)
-                    .put("sync_state", SyncState.PENDING.value)
-                    .put("last_modified", Instant.now().toString())
-                    .build()
-
-                db.update("golems", values, "id = ?", arrayOf(golemId)) > 0
-            } catch (e: Exception) {
-                false
-            }
-        }
-    }
-
-    // ============= COMMAND CRUD =============
-
-    suspend fun upsertCommand(command: Command): Boolean = withContext(Dispatchers.IO) {
-        storage.inTransaction {
-            try {
-                storage.logCrashRecovery("UPSERT", "COMMAND", command.id, command.toJson())
-
-                val existing = db.query(
-                    "commands",
-                    null,
-                    "id = ?",
-                    arrayOf(command.id),
-                    null,
-                    null,
-                    null
+                list.add(
+                    Workspace(
+                        id = it.getString(it.getColumnIndexOrThrow("id")),
+                        name = it.getString(it.getColumnIndexOrThrow("name")),
+                        createdAt = it.getString(it.getColumnIndexOrThrow(if (DatabaseOpenHelper.DATABASE_VERSION > 1) "createdAt" else "created_at"))
+                    )
                 )
-
-                val values = ContentValuesBuilder()
-                    .put("id", command.id)
-                    .put("golem_id", command.golemId)
-                    .put("owner_id", command.ownerId)
-                    .put("trigger_phrase", command.triggerPhrase)
-                    .put("action_type", command.actionType)
-                    .put("action_payload", command.actionPayload)
-                    .put("is_deleted", 0)
-                    .put("sync_state", SyncState.PENDING.value)
-                    .put("last_modified", Instant.now().toString())
-                    .put("created_at", command.createdAt)
-                    .build()
-
-                val result = if (existing.count > 0) {
-                    db.update("commands", values, "id = ?", arrayOf(command.id)) > 0
-                } else {
-                    db.insert("commands", null, values) > 0
-                }
-
-                existing.close()
-                result
-            } catch (e: Exception) {
-                false
             }
+            list
         }
     }
 
-    suspend fun getCommandById(commandId: String): Command? = withContext(Dispatchers.IO) {
-        val cursor = db.query(
-            "commands",
-            null,
-            "id = ? AND is_deleted = 0",
-            arrayOf(commandId),
-            null,
-            null,
-            null
-        )
+    // ============= ROLE ANALYTICS MANAGEMENT =============
 
-        return@withContext cursor.use {
+    suspend fun getRoleAnalytics(): RoleAnalytics = withContext(Dispatchers.IO) {
+        val cursor = db.query("role_analytics", null, "id = 1", null, null, null, null)
+        cursor.use {
             if (it.moveToFirst()) {
-                mapping.storageToCommand(rowToMap(it))
+                RoleAnalytics(
+                    id = it.getInt(it.getColumnIndexOrThrow("id")),
+                    currentRole = it.getString(it.getColumnIndexOrThrow("current_role")),
+                    mostUsedRole = it.getString(it.getColumnIndexOrThrow("most_used_role")),
+                    roleSwitchesCount = it.getInt(it.getColumnIndexOrThrow("role_switches_count"))
+                )
             } else {
-                null
+                RoleAnalytics(1, "Developer", "Developer", 0)
             }
         }
     }
 
-    suspend fun getCommandsByGolem(golemId: String): List<Command> = withContext(Dispatchers.IO) {
-        val cursor = db.query(
-            "commands",
-            null,
-            "golem_id = ? AND is_deleted = 0",
-            arrayOf(golemId),
-            null,
-            null,
-            "created_at DESC"
-        )
-
-        return@withContext cursor.use {
-            val commands = mutableListOf<Command>()
-            while (it.moveToNext()) {
-                commands.add(mapping.storageToCommand(rowToMap(it)))
-            }
-            commands
-        }
-    }
-
-    suspend fun softDeleteCommand(commandId: String): Boolean = withContext(Dispatchers.IO) {
+    suspend fun switchRole(newRole: String): Boolean = withContext(Dispatchers.IO) {
         storage.inTransaction {
             try {
-                storage.logCrashRecovery("SOFT_DELETE", "COMMAND", commandId, "")
-
+                val current = getRoleAnalytics()
+                val updatedSwitches = current.roleSwitchesCount + 1
+                
+                // For simplicity, make the new role the most used one or track via calculation
                 val values = ContentValuesBuilder()
-                    .put("is_deleted", 1)
-                    .put("sync_state", SyncState.PENDING.value)
-                    .put("last_modified", Instant.now().toString())
+                    .put("current_role", newRole)
+                    .put("most_used_role", newRole) 
+                    .put("role_switches_count", updatedSwitches)
                     .build()
-
-                db.update("commands", values, "id = ?", arrayOf(commandId)) > 0
+                db.update("role_analytics", values, "id = 1", null) > 0
             } catch (e: Exception) {
                 false
             }
@@ -939,174 +703,6 @@ class DatabaseService(context: Context) {
             } catch (e: Exception) {
                 SyncResult(
                     modelType = "User",
-                    success = false,
-                    recordsProcessed = 0,
-                    recordsInserted = 0,
-                    recordsUpdated = 0,
-                    recordsConflicted = 0,
-                    message = "Sync failed: ${e.message}",
-                    errors = listOf(e.message ?: "Unknown error")
-                )
-            }
-        }
-    }
-
-    suspend fun syncGolems(externalData: Any?): SyncResult = withContext(Dispatchers.IO) {
-        storage.inTransaction {
-            val errors = mutableListOf<String>()
-            var inserted = 0
-            var updated = 0
-            var conflicted = 0
-
-            try {
-                val records = parser.parseArray(externalData)
-
-                records.forEach { record ->
-                    try {
-                        val parsedGolem = parser.parseGolem(record)
-                        if (parsedGolem == null) {
-                            errors.add("Skipped malformed golem record: ${record["id"]}")
-                            return@forEach
-                        }
-
-                        val localGolem = getGolemById(parsedGolem.id)
-
-                        if (localGolem == null) {
-                            upsertGolem(parsedGolem)
-                            inserted++
-                        } else {
-                            val localModified = getLastModified("golems", parsedGolem.id)
-                            val externalModified = record["last_modified"]?.toString()
-                                ?: Instant.now().toString()
-
-                            val isLocalNewer = localModified > externalModified
-
-                            if (isLocalNewer) {
-                                val cursor = db.query(
-                                    "golems",
-                                    arrayOf("sync_state"),
-                                    "id = ?",
-                                    arrayOf(parsedGolem.id),
-                                    null,
-                                    null,
-                                    null
-                                )
-                                cursor.use {
-                                    if (it.moveToFirst()) {
-                                        val syncState = it.getInt(0)
-                                        if (syncState == SyncState.SYNCED.value) {
-                                            markConflict("golems", parsedGolem.id)
-                                            conflicted++
-                                        }
-                                    }
-                                }
-                            } else {
-                                upsertGolem(parsedGolem)
-                                updated++
-                            }
-                        }
-                    } catch (e: Exception) {
-                        errors.add("Error processing golem ${record["id"]}: ${e.message}")
-                    }
-                }
-
-                SyncResult(
-                    modelType = "Golem",
-                    success = true,
-                    recordsProcessed = records.size,
-                    recordsInserted = inserted,
-                    recordsUpdated = updated,
-                    recordsConflicted = conflicted,
-                    message = "Synced $inserted new, updated $updated existing",
-                    errors = errors
-                )
-            } catch (e: Exception) {
-                SyncResult(
-                    modelType = "Golem",
-                    success = false,
-                    recordsProcessed = 0,
-                    recordsInserted = 0,
-                    recordsUpdated = 0,
-                    recordsConflicted = 0,
-                    message = "Sync failed: ${e.message}",
-                    errors = listOf(e.message ?: "Unknown error")
-                )
-            }
-        }
-    }
-
-    suspend fun syncCommands(externalData: Any?): SyncResult = withContext(Dispatchers.IO) {
-        storage.inTransaction {
-            val errors = mutableListOf<String>()
-            var inserted = 0
-            var updated = 0
-            var conflicted = 0
-
-            try {
-                val records = parser.parseArray(externalData)
-
-                records.forEach { record ->
-                    try {
-                        val parsedCommand = parser.parseCommand(record)
-                        if (parsedCommand == null) {
-                            errors.add("Skipped malformed command record: ${record["id"]}")
-                            return@forEach
-                        }
-
-                        val localCommand = getCommandById(parsedCommand.id)
-
-                        if (localCommand == null) {
-                            upsertCommand(parsedCommand)
-                            inserted++
-                        } else {
-                            val localModified = getLastModified("commands", parsedCommand.id)
-                            val externalModified = record["last_modified"]?.toString()
-                                ?: Instant.now().toString()
-
-                            val isLocalNewer = localModified > externalModified
-
-                            if (isLocalNewer) {
-                                val cursor = db.query(
-                                    "commands",
-                                    arrayOf("sync_state"),
-                                    "id = ?",
-                                    arrayOf(parsedCommand.id),
-                                    null,
-                                    null,
-                                    null
-                                )
-                                cursor.use {
-                                    if (it.moveToFirst()) {
-                                        val syncState = it.getInt(0)
-                                        if (syncState == SyncState.SYNCED.value) {
-                                            markConflict("commands", parsedCommand.id)
-                                            conflicted++
-                                        }
-                                    }
-                                }
-                            } else {
-                                upsertCommand(parsedCommand)
-                                updated++
-                            }
-                        }
-                    } catch (e: Exception) {
-                        errors.add("Error processing command ${record["id"]}: ${e.message}")
-                    }
-                }
-
-                SyncResult(
-                    modelType = "Command",
-                    success = true,
-                    recordsProcessed = records.size,
-                    recordsInserted = inserted,
-                    recordsUpdated = updated,
-                    recordsConflicted = conflicted,
-                    message = "Synced $inserted new, updated $updated existing",
-                    errors = errors
-                )
-            } catch (e: Exception) {
-                SyncResult(
-                    modelType = "Command",
                     success = false,
                     recordsProcessed = 0,
                     recordsInserted = 0,

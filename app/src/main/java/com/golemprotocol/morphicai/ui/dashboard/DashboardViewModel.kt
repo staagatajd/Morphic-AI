@@ -5,6 +5,8 @@ import androidx.lifecycle.viewModelScope
 import com.golemprotocol.morphicai.models.AppSettings
 import com.golemprotocol.morphicai.models.User
 import com.golemprotocol.morphicai.services.DatabaseService
+import com.golemprotocol.morphicai.services.RoleAnalytics
+import com.golemprotocol.morphicai.services.Workspace
 import com.golemprotocol.morphicai.utils.SessionManager
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -14,6 +16,8 @@ import kotlinx.coroutines.launch
 data class DashboardUiState(
     val user: User? = null,
     val settings: AppSettings = AppSettings(),
+    val roleAnalytics: RoleAnalytics? = null,
+    val workspaces: List<Workspace> = emptyList(),
     val isLoading: Boolean = true
 )
 
@@ -33,11 +37,26 @@ class DashboardViewModel(
         viewModelScope.launch {
             val user = sessionManager.getUser()
             val settings = dbService.getAppSettings()
-            _uiState.value = _uiState.value.copy(user = user, settings = settings)
+            val roleAnalytics = dbService.getRoleAnalytics()
+            val workspaces = dbService.getAllWorkspaces()
+            _uiState.value = _uiState.value.copy(
+                user = user,
+                settings = settings,
+                roleAnalytics = roleAnalytics,
+                workspaces = workspaces
+            )
             
             // Simulate content loading for skeletons
-            delay(2000)
+            delay(1000)
             _uiState.value = _uiState.value.copy(isLoading = false)
+        }
+    }
+
+    fun switchRole(newRole: String) {
+        viewModelScope.launch {
+            dbService.switchRole(newRole)
+            val updatedAnalytics = dbService.getRoleAnalytics()
+            _uiState.value = _uiState.value.copy(roleAnalytics = updatedAnalytics)
         }
     }
 
