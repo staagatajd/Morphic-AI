@@ -32,12 +32,24 @@ fun DashboardScreen(
     ) { paddingValues ->
         Box(modifier = Modifier.padding(paddingValues)) {
             when (selectedTab) {
-                0 -> ChatScreen()
+                0 -> ChatScreen(
+                    username = uiState.user?.username ?: "Guest",
+                    workspaceName = uiState.workspaces.find { it.id == uiState.activeWorkspaceId }?.name ?: "Default",
+                    messages = uiState.messages,
+                    onSendMessage = viewModel::sendMessage
+                )
                 1 -> RolesScreen(
                     roleAnalytics = uiState.roleAnalytics,
                     onRoleSelected = viewModel::switchRole
                 )
-                2 -> WorkspaceScreen(workspaces = uiState.workspaces)
+                2 -> WorkspaceScreen(
+                    workspaces = uiState.workspaces,
+                    onCreateWorkspace = viewModel::createWorkspace,
+                    onWorkspaceSelected = { id ->
+                        viewModel.selectWorkspace(id)
+                        selectedTab = 0 // Navigate to Chat tab
+                    }
+                )
                 3 -> MorphicScreen(
                     user = uiState.user,
                     settings = uiState.settings,

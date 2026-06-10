@@ -63,7 +63,16 @@ class AuthViewModel(
             try {
                 val response = ApiClient.signUp(SignUpRequest(username, email, pword))
                 if (response.success == 1) {
-                    _uiState.value = _uiState.value.copy(isLoading = false, isSignUpMode = false, error = "Account created. Please sign in.")
+                    val user = User(
+                        id = response.accessToken ?: "",
+                        username = response.username ?: username,
+                        email = email,
+                        role = response.role ?: "user",
+                        createdAt = Instant.now().toString()
+                    )
+                    dbService.upsertUser(user)
+                    sessionManager.saveSession(user, response.accessToken ?: "")
+                    _uiState.value = _uiState.value.copy(isLoading = false, isSuccess = true)
                 } else {
                     _uiState.value = _uiState.value.copy(isLoading = false, error = response.message)
                 }

@@ -1,5 +1,6 @@
 package com.golemprotocol.morphicai.ui.dashboard
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -16,8 +17,19 @@ import androidx.compose.ui.unit.dp
 import com.golemprotocol.morphicai.services.Workspace
 
 @Composable
-fun WorkspaceScreen(workspaces: List<Workspace>) {
+fun WorkspaceScreen(
+    workspaces: List<Workspace>,
+    onCreateWorkspace: (String) -> Unit,
+    onWorkspaceSelected: (String) -> Unit
+) {
+    // 2. WORKSPACE SEARCH FILTER STATE
     var searchQuery by remember { mutableStateOf("") }
+    var showAddDialog by remember { mutableStateOf(value = false) }
+
+    // Filtered list based on search query
+    val filteredWorkspaces = remember(workspaces, searchQuery) {
+        workspaces.filter { it.name.contains(searchQuery, ignoreCase = true) }
+    }
 
     Column(
         modifier = Modifier
@@ -36,13 +48,17 @@ fun WorkspaceScreen(workspaces: List<Workspace>) {
                 placeholder = { Text("Search Workspace") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 shape = RoundedCornerShape(12.dp),
-                singleLine = true
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                )
             )
             
             Spacer(modifier = Modifier.width(12.dp))
             
             Button(
-                onClick = { /* TODO */ },
+                onClick = { showAddDialog = true },
                 modifier = Modifier.size(56.dp),
                 shape = RoundedCornerShape(12.dp),
                 contentPadding = PaddingValues(0.dp)
@@ -58,26 +74,88 @@ fun WorkspaceScreen(workspaces: List<Workspace>) {
             modifier = Modifier.fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            val filteredWorkspaces = workspaces.filter { it.name.contains(searchQuery, ignoreCase = true) }
-            
             if (filteredWorkspaces.isEmpty() && searchQuery.isEmpty()) {
-                // Show placeholders as per wireframe
-                items(listOf("Name 1", "Name 2")) { name ->
-                    WorkspaceRow(Workspace(id = "", name = name, createdAt = ""))
+                // Initial placeholder state if no real data
+                items(listOf("Personal Workspace", "Team Project Alpha")) { name ->
+                    WorkspaceRow(
+                        workspace = Workspace(id = "placeholder", name = name, createdAt = ""),
+                        onClick = {}
+                    )
                 }
             } else {
-                items(filteredWorkspaces) { workspace ->
-                    WorkspaceRow(workspace)
+                items(filteredWorkspaces, key = { it.id }) { workspace ->
+                    // 4. INTERACTIVE ROUTING
+                    WorkspaceRow(
+                        workspace = workspace,
+                        onClick = { onWorkspaceSelected(workspace.id) }
+                    )
                 }
             }
         }
     }
+
+    // 1. WORKSPACE ADDITION DIALOG
+    if (showAddDialog) {
+        var newWorkspaceName by remember { mutableStateOf("") }
+        var isError by remember { mutableStateOf(false) }
+
+        AlertDialog(
+            onDismissRequest = { showAddDialog = false },
+            title = { Text("New Workspace") },
+            text = {
+                Column {
+                    Text(
+                        "Enter a name for your new workspace environment.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+                    OutlinedTextField(
+                        value = newWorkspaceName,
+                        onValueChange = { 
+                            newWorkspaceName = it
+                            if (it.isNotBlank()) isError = false
+                        },
+                        label = { Text("Workspace Name") },
+                        modifier = Modifier.fillMaxWidth(),
+                        isError = isError,
+                        singleLine = true,
+                        supportingText = {
+                            if (isError) {
+                                Text("Name cannot be blank", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        if (newWorkspaceName.isNotBlank()) {
+                            onCreateWorkspace(newWorkspaceName)
+                            showAddDialog = false
+                        } else {
+                            isError = true
+                        }
+                    }
+                ) {
+                    Text("Create")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddDialog = false }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
 }
 
 @Composable
-fun WorkspaceRow(workspace: Workspace) {
+fun WorkspaceRow(workspace: Workspace, onClick: () -> Unit) {
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onClick() },
         shape = RoundedCornerShape(8.dp),
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
     ) {

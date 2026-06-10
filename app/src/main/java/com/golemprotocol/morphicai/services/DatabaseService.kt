@@ -62,6 +62,11 @@ data class RoleAnalytics(
     val roleSwitchesCount: Int
 )
 
+data class Message(
+    val text: String,
+    val isUser: Boolean
+)
+
 /**
  * Local Database Helper with crash recovery and transaction support
  */
@@ -73,7 +78,7 @@ class DatabaseOpenHelper(context: Context) : SQLiteOpenHelper(
 ) {
     companion object {
         private const val DATABASE_NAME = "golem_protocol.db"
-        const val DATABASE_VERSION = 1
+        const val DATABASE_VERSION = 3
     }
 
     override fun onCreate(db: SQLiteDatabase) {
@@ -87,8 +92,49 @@ class DatabaseOpenHelper(context: Context) : SQLiteOpenHelper(
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Preserve existing data during schema evolution
-        // No destructive changes - only additive
+        if (oldVersion < 2) {
+            // Create the tables that were missing
+            db.execSQL("""
+            CREATE TABLE IF NOT EXISTS workspaces (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """.trimIndent())
+
+            db.execSQL("""
+            CREATE TABLE IF NOT EXISTS role_analytics (
+                id INTEGER PRIMARY KEY DEFAULT 1,
+                current_role TEXT NOT NULL DEFAULT 'Developer',
+                most_used_role TEXT NOT NULL DEFAULT 'Developer',
+                role_switches_count INTEGER NOT NULL DEFAULT 0
+            )
+        """.trimIndent())
+
+            // Seed the initial rows
+            db.execSQL("""
+            INSERT OR IGNORE INTO role_analytics 
+            (id, current_role, most_used_role, role_switches_count) 
+            VALUES (1, 'Developer', 'Developer', 0)
+        """.trimIndent())
+
+            db.execSQL("""
+            INSERT OR IGNORE INTO workspaces (id, name, created_at) 
+            VALUES ('first_workspace_uuid', 'My First Workspace', '2026-06-10T00:00:00Z')
+        """.trimIndent())
+        }
+        if (oldVersion < 3) {
+            db.execSQL("""
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    workspace_id TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    is_user INTEGER NOT NULL,
+                    timestamp TEXT NOT NULL,
+                    FOREIGN KEY (workspace_id) REFERENCES workspaces(id)
+                )
+            """.trimIndent())
+        }
     }
 
     private fun createAllTables(db: SQLiteDatabase) {
@@ -123,6 +169,18 @@ class DatabaseOpenHelper(context: Context) : SQLiteOpenHelper(
                 current_role TEXT NOT NULL DEFAULT 'Developer',
                 most_used_role TEXT NOT NULL DEFAULT 'Developer',
                 role_switches_count INTEGER NOT NULL DEFAULT 0
+            )
+        """.trimIndent())
+
+        // Messages table
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                workspace_id TEXT NOT NULL,
+                text TEXT NOT NULL,
+                is_user INTEGER NOT NULL,
+                timestamp TEXT NOT NULL,
+                FOREIGN KEY (workspace_id) REFERENCES workspaces(id)
             )
         """.trimIndent())
 
@@ -580,12 +638,47 @@ class DatabaseService(context: Context) {
                     Workspace(
                         id = it.getString(it.getColumnIndexOrThrow("id")),
                         name = it.getString(it.getColumnIndexOrThrow("name")),
-                        createdAt = it.getString(it.getColumnIndexOrThrow(if (DatabaseOpenHelper.DATABASE_VERSION > 1) "createdAt" else "created_at"))
+                        createdAt = it.getString(it.getColumnIndexOrThrow("created_at"))                    )
+                )
+            }
+            list
+        }
+    }
+
+    // ============= MESSAGE OPERATIONS =============
+
+    suspend fun getMessagesByWorkspace(workspaceId: String): List<Message> = withContext(Dispatchers.IO) {
+        val cursor = db.query(
+            "messages",
+            null,
+            "workspace_id = ?",
+            arrayOf(workspaceId),
+            null,
+            null,
+            "timestamp ASC"
+        )
+        cursor.use {
+            val list = mutableListOf<Message>()
+            while (it.moveToNext()) {
+                list.add(
+                    Message(
+                        text = it.getString(it.getColumnIndexOrThrow("text")),
+                        isUser = it.getInt(it.getColumnIndexOrThrow("is_user")) == 1
                     )
                 )
             }
             list
         }
+    }
+
+    suspend fun insertMessage(workspaceId: String, text: String, isUser: Boolean): Boolean = withContext(Dispatchers.IO) {
+        val values = ContentValues().apply {
+            put("workspace_id", workspaceId)
+            put("text", text)
+            put("is_user", if (isUser) 1 else 0)
+            put("timestamp", Instant.now().toString())
+        }
+        db.insert("messages", null, values) > 0
     }
 
     // ============= ROLE ANALYTICS MANAGEMENT =============
